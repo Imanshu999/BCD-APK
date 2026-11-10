@@ -5,6 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -20,7 +22,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Android
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Gamepad
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material3.*
@@ -33,14 +37,28 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import kotlinx.coroutines.delay
 
 private val Night = Color(0xFF090D18)
-private val Panel = Color(0xFF171E30)
 private val Accent = Color(0xFF91A7FF)
-private const val GITHUB_PROFILE = "https://github.com/Imanshu999"
-private const val GITHUB_REPO = "https://github.com/Imanshu999/BCD-APK"
+private const val PROFILE = "https://github.com/Imanshu999"
+private const val REPO = "https://github.com/Imanshu999/BCD-APK"
+private const val PREFS = "player_hub_library"
+private const val URI_SET = "saved_uris"
 
-private data class ImportedFile(val uri: Uri, val name: String, val extension: String)
+private data class HubFile(val uri: Uri, val name: String, val ext: String, val mime: String, val size: Long) {
+    val engine: String get() = when (ext) {
+        "html", "htm" -> "Built-in Web Engine"
+        "txt", "md", "json", "xml", "log", "csv" -> "Built-in Text Reader"
+        "png", "jpg", "jpeg", "webp", "gif" -> "Built-in Image Tool (preview pending)"
+        "apk" -> "Android Package Installer (install required)"
+        "pdf" -> "PDF Engine not added"
+        "iso", "zip", "obb", "xapk", "apks" -> "Archive / Game Runtime not added"
+        else -> "No internal tool registered"
+    }
+    val internal: Boolean get() = ext in setOf("html", "htm", "txt", "md", "json", "xml", "log", "csv")
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,168 +70,187 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun PlayerHubApp() {
     val context = LocalContext.current
-    var selected by remember { mutableStateOf("Library") }
-    val importedFiles = remember { mutableStateListOf<ImportedFile>() }
+    var page by remember { mutableStateOf("Library") }
+    var loading by remember { mutableStateOf(true) }
+    var preview by remember { mutableStateOf<HubFile?>(null) }
+    val files = remember { mutableStateListOf<HubFile>() }
 
-    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    LaunchedEffect(Unit) {
+        val saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getStringSet(URI_SET, emptySet()).orEmpty()
+        saved.forEach { raw ->
+            try { files.add(readMetadata(context, Uri.parse(raw))) } catch (_: Exception) { }
+        }
+        delay(700)
+        loading = false
+    }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
+            try { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: SecurityException) { }
             try {
-                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (_: SecurityException) { }
-            val name = queryDisplayName(context, uri)
-            val ext = name.substringAfterLast('.', "").lowercase()
-            if (importedFiles.none { it.uri == uri }) importedFiles.add(ImportedFile(uri, name, ext))
-            Toast.makeText(context, "Added to Player Hub", Toast.LENGTH_SHORT).show()
+                val f = readMetadata(context, uri)
+                if (files.none { it.uri == uri }) files.add(f)
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+                    .putStringSet(URI_SET, (files.map { it.uri.toString() } + uri.toString()).toSet()).apply()
+                Toast.makeText(context, "Added to Player Hub", Toast.LENGTH_SHORT).show()
+            } catch (_: Exception) { Toast.makeText(context, "Unable to read this file", Toast.LENGTH_LONG).show() }
         }
     }
 
-    MaterialTheme(colorScheme = darkColorScheme(
-        background = Night, surface = Panel, primary = Accent,
-        onBackground = Color(0xFFF4F6FF), onSurface = Color(0xFFF4F6FF)
-    )) {
+    MaterialTheme(colorScheme = darkColorScheme(background = Night, surface = Color(0xFF171E30), primary = Accent, onSurface = Color.White)) {
         Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF202B4A), Night, Night)))) {
-            Scaffold(
-                containerColor = Color.Transparent,
-                bottomBar = {
-                    NavigationBar(containerColor = Color(0xEE111827)) {
-                        NavigationBarItem(selected == "Library", { selected = "Library" }, icon = { Icon(Icons.Default.SportsEsports, null) }, label = { Text("Library") })
-                        NavigationBarItem(selected == "Controllers", { selected = "Controllers" }, icon = { Icon(Icons.Default.Gamepad, null) }, label = { Text("Controllers") })
-                        NavigationBarItem(selected == "Settings", { selected = "Settings" }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Settings") })
-                    }
+            Scaffold(containerColor = Color.Transparent, bottomBar = {
+                NavigationBar(containerColor = Color(0xEE111827)) {
+                    NavigationBarItem(page == "Library", { page = "Library" }, icon = { Icon(Icons.Default.SportsEsports, null) }, label = { Text("Library") })
+                    NavigationBarItem(page == "Controllers", { page = "Controllers" }, icon = { Icon(Icons.Default.Gamepad, null) }, label = { Text("Controllers") })
+                    NavigationBarItem(page == "Settings", { page = "Settings" }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Settings") })
                 }
-            ) { padding ->
-                LazyColumn(
-                    Modifier.fillMaxSize().padding(padding),
-                    contentPadding = PaddingValues(22.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
+            }) { padding ->
+                LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     item {
                         Text("PLAYER HUB", color = Accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 3.sp)
-                        Text(selected, fontSize = 34.sp, fontWeight = FontWeight.Bold)
-                        Text(
-                            if (selected == "Library") "Your games and supported files, in one place."
-                            else if (selected == "Controllers") "Controller tools are coming in a future update."
-                            else "App preferences and developer links.",
-                            color = Color(0xFFB7C0D8), fontSize = 14.sp
-                        )
+                        Text(page, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                        Text("Play • Run • Manage", color = Color(0xFFB7C0D8))
                     }
-                    when (selected) {
+                    when (page) {
                         "Library" -> {
                             item {
-                                GlassCard {
-                                    Text("YOUR GAME LIBRARY", color = Accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                    Spacer(Modifier.height(8.dp))
-                                    Text("Bring your game files together.", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                                    Spacer(Modifier.height(6.dp))
-                                    Text("Choose files from your device. Android's file picker lets you approve exactly which files Player Hub can access.", color = Color(0xFFC3CBE0), lineHeight = 20.sp)
-                                    Spacer(Modifier.height(14.dp))
-                                    Button(onClick = { filePicker.launch(arrayOf("*/*")) }) {
-                                        Icon(Icons.Default.Add, null)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("Add files / games")
-                                    }
+                                CardBox {
+                                    Text("YOUR GAME & FILE LIBRARY", color = Accent, fontWeight = FontWeight.Bold)
+                                    Text("One hub. Built-in tools.", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+                                    Text("Add a file once. Player Hub remembers it and shows which internal tool is available.", color = Color(0xFFC3CBE0))
+                                    Button(onClick = { picker.launch(arrayOf("*/*")) }) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("Add files / games") }
                                 }
                             }
-                            item { Text("IMPORTED FILES (" + importedFiles.size + ")", color = Color(0xFFB7C0D8), fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 2.sp) }
-                            if (importedFiles.isEmpty()) {
-                                item {
-                                    GlassCard {
-                                        Text("Your library is empty", fontWeight = FontWeight.SemiBold)
-                                        Text("Add APK, ISO, ZIP, OBB or other game files to see them here.", color = Color(0xFFB7C0D8), fontSize = 13.sp)
-                                    }
-                                }
-                            } else {
-                                items(importedFiles, key = { it.uri.toString() }) { file ->
-                                    GlassCard {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Box(Modifier.size(48.dp).background(Color(0xFF293657), RoundedCornerShape(14.dp)), contentAlignment = Alignment.Center) {
-                                                Icon(if (file.extension == "apk") Icons.Default.Android else Icons.Default.SportsEsports, null, tint = Accent)
-                                            }
-                                            Spacer(Modifier.width(12.dp))
-                                            Column(Modifier.weight(1f)) {
-                                                Text(file.name, fontWeight = FontWeight.SemiBold)
-                                                Text(file.extension.uppercase().ifBlank { "FILE" }, color = Color(0xFFB7C0D8), fontSize = 11.sp)
-                                            }
-                                            TextButton(onClick = { openImportedFile(context, file) }) { Text(if (file.extension == "apk") "Install" else "Open") }
+                            item { Text("MY LIBRARY (" + files.size + ")", color = Color(0xFFB7C0D8), fontWeight = FontWeight.Bold) }
+                            if (files.isEmpty()) item { CardBox { Text("No files added yet"); Text("Select HTML, text, APK, ISO, ZIP, OBB or another file.") } }
+                            else items(files, key = { it.uri.toString() }) { file ->
+                                CardBox {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(when (file.ext) {
+                                            "apk" -> Icons.Default.Android
+                                            "html", "htm", "txt", "md", "json", "xml" -> Icons.Default.Description
+                                            else -> Icons.Default.SportsEsports
+                                        }, null, tint = Accent, modifier = Modifier.size(34.dp))
+                                        Spacer(Modifier.width(10.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(file.name, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                            Text(file.ext.uppercase() + " • " + sizeLabel(file.size), color = Color(0xFFB7C0D8), fontSize = 11.sp)
+                                            Text(file.engine, color = Accent, fontSize = 10.sp)
                                         }
                                     }
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(onClick = {
+                                            if (file.internal) preview = file
+                                            else Toast.makeText(context, runMessage(file), Toast.LENGTH_LONG).show()
+                                        }, modifier = Modifier.weight(1f)) { Text(if (file.internal) "Run inside" else "Run") }
+                                        if (file.ext == "apk") OutlinedButton(onClick = { installApk(context, file.uri) }, modifier = Modifier.weight(1f)) { Text("Install") }
+                                        else OutlinedButton(onClick = { Toast.makeText(context, file.engine, Toast.LENGTH_SHORT).show() }, modifier = Modifier.weight(1f)) { Text("Tool info") }
+                                    }
                                 }
                             }
-                            item {
-                                Text("APK files are handed to Android's package installer. ISO, ZIP, OBB and PC game files can be imported, but need a compatible app or separate game runtime to run.", color = Color(0xFF8995B2), fontSize = 11.sp, lineHeight = 16.sp)
-                            }
+                            item { Text("File cards show each format's assigned tool. Unsupported formats are not silently opened in another app.", color = Color(0xFF8995B2), fontSize = 11.sp) }
                         }
-                        "Controllers" -> item {
-                            GlassCard {
-                                Icon(Icons.Default.Gamepad, null, tint = Accent, modifier = Modifier.size(34.dp))
-                                Spacer(Modifier.height(8.dp))
-                                Text("Player Hub Controllers", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-                                Text("Controller mapping, touch controls and per-game profiles are planned. They are not implemented in this preview yet.", color = Color(0xFFC3CBE0), lineHeight = 20.sp)
-                            }
-                        }
+                        "Controllers" -> item { CardBox { Icon(Icons.Default.Gamepad, null, tint = Accent); Text("Player Hub Controllers", fontSize = 20.sp, fontWeight = FontWeight.SemiBold); Text("Custom touch controls, controller mapping and per-game profiles need a dedicated input engine. This module is still under development.", color = Color(0xFFC3CBE0)) } }
                         else -> {
+                            item { CardBox { Text("ABOUT PLAYER HUB", color = Accent, fontWeight = FontWeight.Bold); Text("Your own Android game and file hub.") } }
                             item {
-                                GlassCard {
-                                    Text("ABOUT PLAYER HUB", color = Accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                    Spacer(Modifier.height(6.dp))
-                                    Text("Player Hub", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-                                    Text("Android game library and file launcher.", color = Color(0xFFB7C0D8))
+                                CardBox {
+                                    Text("DEVELOPER LINKS", color = Accent, fontWeight = FontWeight.Bold)
+                                    LinkRow("GH", "GitHub profile", "@Imanshu999") { openUrl(context, PROFILE) }
+                                    LinkRow("GH", "Player Hub repository", "Imanshu999 / BCD-APK") { openUrl(context, REPO) }
                                 }
                             }
-                            item {
-                                GlassCard {
-                                    Text("DEVELOPER", color = Accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                    Spacer(Modifier.height(12.dp))
-                                    LinkRow("GH", "GitHub profile", "@Imanshu999") { openUrl(context, GITHUB_PROFILE) }
-                                    Spacer(Modifier.height(10.dp))
-                                    LinkRow("GH", "Player Hub repository", "Imanshu999 / BCD-APK") { openUrl(context, GITHUB_REPO) }
-                                }
-                            }
-                            item {
-                                GlassCard {
-                                    Text("SOCIAL MEDIA", color = Accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                    Spacer(Modifier.height(6.dp))
-                                    Text("Only GitHub is configured right now. Other social profile links can be added when their URLs are provided.", color = Color(0xFFC3CBE0), lineHeight = 20.sp)
-                                }
-                            }
-                            item {
-                                GlassCard {
-                                    Text("FILE ACCESS", color = Accent, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                    Spacer(Modifier.height(6.dp))
-                                    Text("No blanket storage permission is requested. Select files using Android's system picker; access is limited to the items you choose.", color = Color(0xFFC3CBE0), lineHeight = 20.sp)
-                                }
-                            }
+                            item { CardBox { Text("INTERNAL TOOL REGISTRY", color = Accent, fontWeight = FontWeight.Bold); Text("Built in: HTML Web Engine and Text Reader. Not yet built: PDF reader, image renderer, archive tools, APK virtual runtime and Windows game runtime.", color = Color(0xFFC3CBE0)) } }
+                            item { CardBox { Text("FILE ACCESS", color = Accent, fontWeight = FontWeight.Bold); Text("The Android file picker grants Player Hub access only to files you select. No broad storage permission is requested.", color = Color(0xFFC3CBE0)) } }
                         }
                     }
-                    item { Text("PLAYER HUB • ANDROID PREVIEW", color = Color(0xFF7885A5), fontSize = 10.sp, letterSpacing = 1.5.sp) }
+                    item { Text("PLAYER HUB • INTERNAL TOOLS PREVIEW", color = Color(0xFF7885A5), fontSize = 10.sp) }
+                }
+            }
+            if (loading) {
+                Box(Modifier.fillMaxSize().background(Night.copy(alpha = 0.97f)), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        HubLogo()
+                        Spacer(Modifier.height(16.dp))
+                        Text("PLAYER HUB", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                        Text("Play • Run • Manage", color = Accent)
+                        Spacer(Modifier.height(22.dp))
+                        CircularProgressIndicator(color = Accent)
+                        Text("Loading your library…", color = Color(0xFFB7C0D8), modifier = Modifier.padding(top = 10.dp))
+                    }
                 }
             }
         }
     }
+
+    preview?.let { file ->
+        AlertDialog(
+            onDismissRequest = { preview = null },
+            title = { Text(file.name) },
+            text = {
+                if (file.ext == "html" || file.ext == "htm") {
+                    AndroidView(factory = { ctx ->
+                        WebView(ctx).apply {
+                            settings.javaScriptEnabled = false
+                            webViewClient = WebViewClient()
+                            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                            loadDataWithBaseURL(null, readText(context, file.uri), "text/html", "UTF-8", null)
+                        }
+                    }, modifier = Modifier.fillMaxWidth().height(420.dp))
+                } else {
+                    Text(readText(context, file.uri).take(10000))
+                }
+            },
+            confirmButton = { TextButton(onClick = { preview = null }) { Text("Close") }
+            }
+        )
+    }
 }
 
-private fun queryDisplayName(context: Context, uri: Uri): String {
+private fun readMetadata(context: Context, uri: Uri): HubFile {
+    val name = queryName(context, uri)
+    val mime = context.contentResolver.getType(uri) ?: "application/octet-stream"
+    var size = -1L
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { c ->
+        if (c.moveToFirst()) { val i = c.getColumnIndex(OpenableColumns.SIZE); if (i >= 0 && !c.isNull(i)) size = c.getLong(i) }
+    }
+    return HubFile(uri, name, name.substringAfterLast('.', "").lowercase(), mime, size)
+}
+
+private fun queryName(context: Context, uri: Uri): String {
     var name = uri.lastPathSegment ?: "Selected file"
-    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-        if (cursor.moveToFirst()) {
-            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (index >= 0) name = cursor.getString(index) ?: name
-        }
+    context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+        if (c.moveToFirst()) { val i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME); if (i >= 0) name = c.getString(i) ?: name }
     }
     return name
 }
 
-private fun openImportedFile(context: Context, file: ImportedFile) {
+private fun readText(context: Context, uri: Uri): String =
+    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() } ?: "Unable to read file."
+
+private fun installApk(context: Context, uri: Uri) {
     try {
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            if (file.extension == "apk") setDataAndType(file.uri, "application/vnd.android.package-archive")
-            else setDataAndType(file.uri, context.contentResolver.getType(file.uri) ?: "*/*")
+        val i = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        context.startActivity(Intent.createChooser(intent, if (file.extension == "apk") "Install APK" else "Open file with"))
-    } catch (_: Exception) {
-        Toast.makeText(context, "No compatible app found for this file.", Toast.LENGTH_LONG).show()
-    }
+        context.startActivity(i)
+    } catch (_: Exception) { Toast.makeText(context, "Android could not start APK installation.", Toast.LENGTH_LONG).show() }
+}
+
+private fun runMessage(file: HubFile): String = when (file.ext) {
+    "apk" -> "An Android app cannot execute another APK as an in-app process without installing it. This needs a separate virtual Android runtime."
+    "iso", "zip", "obb", "xapk", "apks" -> "Imported. Player Hub's archive/game runtime for this format has not been implemented yet."
+    "pdf" -> "The built-in PDF reader is not implemented yet."
+    else -> "No internal runtime is registered for this file type."
+}
+
+private fun sizeLabel(n: Long): String = when {
+    n < 0 -> "Size unknown"
+    n < 1024 -> n.toString() + " B"
+    n < 1024 * 1024 -> (n / 1024).toString() + " KB"
+    else -> String.format("%.1f MB", n / (1024f * 1024f))
 }
 
 private fun openUrl(context: Context, url: String) {
@@ -222,25 +259,23 @@ private fun openUrl(context: Context, url: String) {
 }
 
 @Composable
+private fun HubLogo() {
+    Box(Modifier.size(84.dp).background(Brush.linearGradient(listOf(Color(0xFF7C3AED), Color(0xFF0891B2))), RoundedCornerShape(26.dp)), contentAlignment = Alignment.Center) {
+        Icon(Icons.Default.Gamepad, null, tint = Color.White, modifier = Modifier.size(50.dp))
+    }
+}
+
+@Composable
 private fun LinkRow(tag: String, title: String, subtitle: String, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(42.dp).background(Color(0xFF293657), RoundedCornerShape(13.dp)), contentAlignment = Alignment.Center) {
-            Text(tag, color = Accent, fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, color = Color(0xFFB7C0D8), fontSize = 12.sp)
-        }
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(40.dp).background(Color(0xFF293657), RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) { Text(tag, color = Accent, fontWeight = FontWeight.Bold) }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, color = Color(0xFFB7C0D8), fontSize = 12.sp) }
         Text("Open ↗", color = Accent, fontSize = 12.sp)
     }
 }
 
 @Composable
-private fun GlassCard(content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        Modifier.fillMaxWidth().background(Color(0xB91A2338), RoundedCornerShape(24.dp))
-            .border(1.dp, Color(0x35FFFFFF), RoundedCornerShape(24.dp)).padding(20.dp),
-        content = content
-    )
+private fun CardBox(content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth().background(Color(0xB91A2338), RoundedCornerShape(22.dp)).border(1.dp, Color(0x35FFFFFF), RoundedCornerShape(22.dp)).padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
 }
