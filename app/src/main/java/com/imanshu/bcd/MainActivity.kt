@@ -23,6 +23,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Android
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Settings
@@ -74,6 +82,9 @@ private fun PlayerHubApp() {
     var loading by remember { mutableStateOf(true) }
     var preview by remember { mutableStateOf<HubFile?>(null) }
     val files = remember { mutableStateListOf<HubFile>() }
+    var deleteTarget by remember { mutableStateOf<HubFile?>(null) }
+    var clearAll by remember { mutableStateOf(false) }
+    var searchText by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         val saved = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getStringSet(URI_SET, emptySet()).orEmpty()
@@ -82,6 +93,17 @@ private fun PlayerHubApp() {
         }
         delay(700)
         loading = false
+    }
+
+    fun saveLibrary() {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putStringSet(URI_SET, files.map { it.uri.toString() }.toSet()).apply()
+    }
+    fun removeFromLibrary(file: HubFile) {
+        files.removeAll { it.uri == file.uri }
+        saveLibrary()
+        try { context.contentResolver.releasePersistableUriPermission(file.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) { }
+        Toast.makeText(context, "Removed from Player Hub (original file kept)", Toast.LENGTH_SHORT).show()
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -122,22 +144,34 @@ private fun PlayerHubApp() {
                                     Button(onClick = { picker.launch(arrayOf("*/*")) }) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("Add files / games") }
                                 }
                             }
-                            item { Text("MY LIBRARY (" + files.size + ")", color = Color(0xFFB7C0D8), fontWeight = FontWeight.Bold) }
+                            item {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("MY LIBRARY (" + files.size + ")", color = Color(0xFFB7C0D8), fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                    if (files.isNotEmpty()) TextButton(onClick = { clearAll = true }) { Icon(Icons.Default.Delete, null); Text("Clear all") }
+                }
+                OutlinedTextField(value = searchText, onValueChange = { searchText = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Search files…") }, leadingIcon = { Icon(Icons.Default.Search, null) })
+            }
                             if (files.isEmpty()) item { CardBox { Text("No files added yet"); Text("Select HTML, text, APK, ISO, ZIP, OBB or another file.") } }
-                            else items(files, key = { it.uri.toString() }) { file ->
+                            else items(files.filter { it.name.contains(searchText, ignoreCase = true) || it.ext.contains(searchText, ignoreCase = true) }.sortedBy { it.name.lowercase() }, key = { it.uri.toString() }) { file ->
                                 CardBox {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Icon(when (file.ext) {
                                             "apk" -> Icons.Default.Android
-                                            "html", "htm", "txt", "md", "json", "xml" -> Icons.Default.Description
-                                            else -> Icons.Default.SportsEsports
-                                        }, null, tint = Accent, modifier = Modifier.size(34.dp))
+                                            "html", "htm", "js", "css", "kt", "java", "py" -> Icons.Default.Code
+                                            "txt", "md", "json", "xml", "log", "csv" -> Icons.Default.Description
+                                            "pdf" -> Icons.Default.PictureAsPdf
+                                            "zip", "7z", "rar", "obb", "xapk", "apks", "iso" -> Icons.Default.Archive
+                                            "mp3", "wav", "ogg", "m4a" -> Icons.Default.AudioFile
+                                            "mp4", "mkv", "webm" -> Icons.Default.Movie
+                                            else -> Icons.Default.InsertDriveFile
+                                        }, null, tint = Accent, modifier = Modifier.size(42.dp))
                                         Spacer(Modifier.width(10.dp))
                                         Column(Modifier.weight(1f)) {
-                                            Text(file.name, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                                            Text(file.name, fontWeight = FontWeight.SemiBold, maxLines = 2)
                                             Text(file.ext.uppercase() + " • " + sizeLabel(file.size), color = Color(0xFFB7C0D8), fontSize = 11.sp)
                                             Text(file.engine, color = Accent, fontSize = 10.sp)
                                         }
+                                        IconButton(onClick = { deleteTarget = file }) { Icon(Icons.Default.Delete, "Remove from library", tint = Color(0xFFFF8295)) }
                                     }
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         Button(onClick = {
@@ -149,7 +183,7 @@ private fun PlayerHubApp() {
                                     }
                                 }
                             }
-                            item { Text("File cards show each format's assigned tool. Unsupported formats are not silently opened in another app.", color = Color(0xFF8995B2), fontSize = 11.sp) }
+                            item { Text("Remove deletes the library entry only, not the original device file. Clear all is also available.", color = Color(0xFF8995B2), fontSize = 11.sp) }
                         }
                         "Controllers" -> item { CardBox { Icon(Icons.Default.Gamepad, null, tint = Accent); Text("Player Hub Controllers", fontSize = 20.sp, fontWeight = FontWeight.SemiBold); Text("Custom touch controls, controller mapping and per-game profiles need a dedicated input engine. This module is still under development.", color = Color(0xFFC3CBE0)) } }
                         else -> {
@@ -182,6 +216,24 @@ private fun PlayerHubApp() {
                 }
             }
         }
+    }
+
+    deleteTarget?.let { file ->
+        AlertDialog(onDismissRequest = { deleteTarget = null }, title = { Text("Remove file?") },
+            text = { Text("Remove " + file.name + " from Player Hub? The original file on your device will not be deleted.") },
+            confirmButton = { TextButton(onClick = { removeFromLibrary(file); deleteTarget = null }) { Text("Remove") } },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } })
+    }
+    if (clearAll) {
+        AlertDialog(onDismissRequest = { clearAll = false }, title = { Text("Clear library?") },
+            text = { Text("All entries will be removed from Player Hub. Original files will remain on your device.") },
+            confirmButton = { TextButton(onClick = {
+                files.toList().forEach { f -> try { context.contentResolver.releasePersistableUriPermission(f.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) { } }
+                files.clear()
+                saveLibrary()
+                clearAll = false
+            }) { Text("Clear all") } },
+            dismissButton = { TextButton(onClick = { clearAll = false }) { Text("Cancel") } })
     }
 
     preview?.let { file ->
