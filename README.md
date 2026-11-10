@@ -1,14 +1,21 @@
-# BCD Android
+# Player Hub (Android)
 
-An Android-first launcher prototype inspired by the BCD Games project. This repository is an independent Android implementation; the original iOS runtime cannot be copied directly to Android.
+Player Hub is an Android-first game library and file-launcher prototype.
 
-## Current milestone
-- Android launcher shell with a glass-style dark UI
-- Game library placeholder and import entry point
-- GitHub Actions workflow to build a debug APK
+## Included
+- Player Hub branding with a dark glass-style UI
+- Library, Controllers and Settings bottom navigation
+- Android system document picker for selecting files without blanket storage access
+- Imported-file list and APK hand-off to Android's package installer
+- Open other selected files with a compatible installed app
+- GitHub profile and repository links in Settings
+
+## Compatibility limits
+- APK installation is handed to Android's package installer and requires user confirmation. Android may also ask the user to allow installs from this source.
+- ISO, ZIP, OBB, XAPK, APKS and PC game files may be selected/imported, but importing does not make them executable.
+- Windows PC games such as GTA need a compatible runtime/emulator, graphics translation, game-specific setup and device testing. This repository does not yet contain that runtime.
+- Player Hub does not get unrestricted access to all storage. Android's system picker grants access only to files the user selects.
+- Controller mapping, touch controls and per-game optimization are planned, not yet implemented.
 
 ## Build
-Push to `main` or run **Build Android APK** from the Actions tab. Download the `bcd-android-debug-apk` artifact from the workflow run.
-
-## Important
-This first milestone is a launcher prototype, not a Windows-game compatibility runtime. Running Windows PC games requires substantial Android-native integration (for example Wine/Box64 and device-specific graphics support), testing, and license review. No proprietary binaries or API keys are included.
+Push to `main` or run **Build Android APK** from the Actions tab. Download the debug APK artifact after a successful workflow run.
