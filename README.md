@@ -16,3 +16,7 @@ The system file picker grants access only to files selected by the user; no broa
 
 ## Build
 Run **Build Android APK** in GitHub Actions and download the debug APK artifact after a successful build.
+
+
+## Development roadmap
+See [docs/ROADMAP.md](docs/ROADMAP.md) for the planned 30-feature roadmap. Planned features are clearly distinguished from implemented functionality.
